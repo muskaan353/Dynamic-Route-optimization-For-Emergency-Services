@@ -1,0 +1,366 @@
+!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>Delhi Police Emergency Routes - Blue Theme</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://unpkg.com/esri-leaflet-geocoder@3.1.3/dist/esri-leaflet-geocoder.css"/>
+    <style>
+        body{margin:0;padding:0;font-family:Segoe UI, Tahoma, Geneva, Verdana, sans-serif;background:#f0f2f5;color:#333}
+        header{background:#2c3e50;color:#fff;padding:1rem 2rem;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+        .header-content{max-width:1200px;margin:0 auto;display:flex;justify-content:space-between;align-items:center}
+        .logo{display:flex;align-items:center;gap:1rem}
+        .logo-image{width:50px;height:50px;border-radius:50%;background:#3498db;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+        .map-container{display:flex;height:calc(100vh - 130px);max-width:1200px;margin:0 auto}
+        #map{flex:3;height:100%;min-height:400px;border-radius:8px;box-shadow:0 0 15px rgba(0,0,0,.1);background:#f8f9fa}
+        .controls{flex:1;padding:1rem;background:#fff;border-radius:8px;margin-left:1rem;box-shadow:0 0 15px rgba(0,0,0,.1);overflow-y:auto}
+        .control-group{margin-bottom:1.5rem}
+        h2,h3{color:#2c3e50;margin-top:0}
+        button{background:#3498db;color:#fff;border:0;padding:.5rem 1rem;border-radius:4px;cursor:pointer;transition:.25s;margin-right:.5rem}
+        button:hover{background:#2980b9}
+        button:disabled{background:#95a5a6;cursor:not-allowed}
+        .route-info{background:#f8f9fa;padding:1rem;border-radius:4px;margin-top:1rem}
+        .eta-display{font-size:1.2rem;font-weight:700;color:#e74c3c;margin-top:.5rem}
+        .emergency-type{display:flex;gap:1rem;margin:1rem 0}
+        .emergency-option{padding:.5rem;border:2px solid #ddd;border-radius:4px;cursor:pointer;transition:all .3s}
+        .emergency-option.selected{border-color:#e74c3c;background:#ffebee}
+        .blocked-road-controls{margin-top:1rem;padding-top:1rem;border-top:1px solid #eee}
+        .featured-image{width:100%;height:200px;margin-bottom:1rem;border-radius:8px;overflow:hidden}
+        .featured-image img{width:100%;height:100%;object-fit:cover}
+        @media (max-width:768px){.map-container{flex-direction:column;height:auto}#map{height:400px;margin-bottom:1rem}.controls{margin-left:0}}
+    </style>
+</head>
+<body>
+<header>
+    <div class="header-content">
+        <div class="logo">
+            <div class="logo-image">
+                <img src="https://e1.pxfuel.com/desktop-wallpaper/953/301/desktop-wallpaper-delhi-police-logo-police-logo.jpg"
+                     alt="logo" style="width:50px;height:50px;border-radius:50%;object-fit:cover"/>
+            </div>
+            <h1>
+                <span style="color:red">DELHI</span>
+                <span style="color:blue">POLICE</span>
+                <span style="color:red">EMERGENCY</span>
+                <span style="color:blue">SERVICES</span>
+                <span style="color:red">ROUTES</span>
+                <span style="color:blue">OPTIMIZER</span>
+            </h1>
+        </div>
+    </div>
+</header>
+
+<div class="map-container">
+    <div id="map"></div>
+    <div class="controls">
+        <div class="featured-image">
+            <img src="https://complainthub.in/wp-content/uploads/2023/09/Delhi-Police-Logo.png" alt="featured"/>
+        </div>
+
+        <div class="control-group">
+            <h3>Route Selection</h3>
+            <p>Click map to set start/end. Use buttons to switch.</p>
+            <p><strong>Current Mode:</strong> <span id="current-selection-mode">Start Point</span></p>
+            <button id="set-start">Set Start Point</button>
+            <button id="set-end">Set End Point</button>
+            <button id="clear-points">Clear All</button>
+        </div>
+
+        <div class="control-group">
+            <h3>Emergency Type</h3>
+            <p>Select to influence ETA calculation:</p>
+            <div class="emergency-type">
+                <div class="emergency-option" data-type="high">High Priority (Siren)</div>
+                <div class="emergency-option" data-type="medium">Medium Priority</div>
+                <div class="emergency-option" data-type="low">Low Priority</div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>Route Calculation</h3>
+            <button id="calculate-route">Calculate Optimal Route</button>
+            <div class="route-info" id="route-info" style="display:none">
+                <h4>Route Details</h4>
+                <div id="route-summary">No route calculated yet.</div>
+                <div class="eta-display" id="eta-display"></div>
+                <button id="simulate-traffic">Simulate Traffic Conditions</button>
+            </div>
+        </div>
+
+        <div class="control-group blocked-road-controls">
+            <h3>Road Block Management</h3>
+            <p>Click map while Road Block Mode enabled to add/remove blocked points.</p>
+            <button id="block-road-mode">Enable Road Block Mode</button>
+            <div id="blocked-roads-list" style="margin-top:1rem"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/esri-leaflet@3.0.10/dist/esri-leaflet.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Map init
+    const map = L.map('map').setView([28.6139, 77.2090], 13);
+    L.esri.basemapLayer('Imagery', { attribution: 'Tiles © Esri' }).addTo(map);
+    L.esri.basemapLayer('ImageryLabels').addTo(map);
+
+    // State
+    let startMarker = null, endMarker = null, routeLayer = null;
+    let selectionMode = 'start', roadBlockMode = false, blockedRoads = [];
+    let emergencyType = 'high';
+    let lastRouteDurationMinutes = null;
+
+    // UI refs
+    const currentModeDisplay = document.getElementById('current-selection-mode');
+    const setStartBtn = document.getElementById('set-start');
+    const setEndBtn = document.getElementById('set-end');
+    const clearPointsBtn = document.getElementById('clear-points');
+    const calculateRouteBtn = document.getElementById('calculate-route');
+    const routeInfoDiv = document.getElementById('route-info');
+    const routeSummaryDiv = document.getElementById('route-summary');
+    const etaDisplay = document.getElementById('eta-display');
+    const emergencyOptions = document.querySelectorAll('.emergency-option');
+    const blockRoadBtn = document.getElementById('block-road-mode');
+    const blockedRoadsList = document.getElementById('blocked-roads-list');
+    const simulateTrafficBtn = document.getElementById('simulate-traffic');
+
+    const ROUTE_COLOR = '#007bff';
+
+    // Wiring
+    setStartBtn.addEventListener('click', () => { selectionMode = 'start'; updateSelectionModeDisplay(); });
+    setEndBtn.addEventListener('click', () => { selectionMode = 'end'; updateSelectionModeDisplay(); });
+    clearPointsBtn.addEventListener('click', clearAllPoints);
+    calculateRouteBtn.addEventListener('click', calculateOptimalRoute);
+    blockRoadBtn.addEventListener('click', toggleRoadBlockMode);
+    simulateTrafficBtn.addEventListener('click', simulateTrafficConditions);
+
+    emergencyOptions.forEach(opt => {
+        opt.addEventListener('click', () => {
+            emergencyOptions.forEach(o => o.classList.remove('selected'));
+            opt.classList.add('selected');
+            emergencyType = opt.dataset.type;
+        });
+    });
+
+    map.on('click', (e) => {
+        if (roadBlockMode) addRoadBlock(e.latlng);
+        else (selectionMode === 'start') ? setStartPoint(e.latlng) : setEndPoint(e.latlng);
+    });
+
+    function updateSelectionModeDisplay() {
+        currentModeDisplay.textContent = roadBlockMode ? 'Road Block Mode' : (selectionMode === 'start' ? 'Start Point' : 'End Point');
+    }
+
+    function setStartPoint(latlng) {
+        if (startMarker) map.removeLayer(startMarker);
+        startMarker = L.marker(latlng, { draggable: true, icon: L.divIcon({
+            className: 'start-marker', html: '<div style="background:#2ecc71;border-radius:50%;width:20px;height:20px;border:3px solid white"></div>',
+            iconSize: [26, 26], iconAnchor: [13, 13]
+        }) }).addTo(map).bindPopup('Start Point').openPopup();
+        startMarker.on('dragend', () => { calculateRouteBtn.disabled = !(startMarker && endMarker); });
+        calculateRouteBtn.disabled = !(startMarker && endMarker);
+    }
+
+    function setEndPoint(latlng) {
+        if (endMarker) map.removeLayer(endMarker);
+        endMarker = L.marker(latlng, { draggable: true, icon: L.divIcon({
+            className: 'end-marker', html: '<div style="background:#e74c3c;border-radius:50%;width:20px;height:20px;border:3px solid white"></div>',
+            iconSize: [26, 26], iconAnchor: [13, 13]
+        }) }).addTo(map).bindPopup('End Point').openPopup();
+        endMarker.on('dragend', () => { calculateRouteBtn.disabled = !(startMarker && endMarker); });
+        calculateRouteBtn.disabled = !(startMarker && endMarker);
+    }
+
+    function clearAllPoints() {
+        if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+        if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
+        if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+        routeInfoDiv.style.display = 'none'; calculateRouteBtn.disabled = true;
+        blockedRoads.forEach(r => map.removeLayer(r.marker)); blockedRoads = [];
+        updateBlockedRoadsList();
+    }
+
+    // Calculate route using OSRM; simulate detour if blocked intersects
+    async function calculateOptimalRoute() {
+        if (!startMarker || !endMarker) { alert('Please set both start and end points first.'); return; }
+        calculateRouteBtn.textContent = 'Calculating...'; calculateRouteBtn.disabled = true;
+        try {
+            const s = startMarker.getLatLng(), e = endMarker.getLatLng();
+            const url = https://router.project-osrm.org/route/v1/driving/${s.lng},${s.lat};${e.lng},${e.lat}?overview=full&geometries=geojson;
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('Routing server error ' + resp.status);
+            const data = await resp.json();
+            if (!data || data.code !== 'Ok' || !data.routes || data.routes.length === 0) throw new Error('Failed to calculate route');
+
+            const route = data.routes[0];
+            const pathPoints = route.geometry.coordinates.map(c => [c[1], c[0]]);
+
+            let intersectsBlocked = false;
+            const thresholdDeg = 0.0005; // ~50m
+            for (const b of blockedRoads) {
+                for (const p of pathPoints) {
+                    const dlat = Math.abs(b.latlng.lat - p[0]);
+                    const dlng = Math.abs(b.latlng.lng - p[1]);
+                    if (dlat <= thresholdDeg && dlng <= thresholdDeg) { intersectsBlocked = true; break; }
+                }
+                if (intersectsBlocked) break;
+            }
+
+            if (intersectsBlocked) {
+                const simulated = generateSimulatedRoute(s, e, emergencyType, blockedRoads);
+                const distKm = haversineDistance(s.lat, s.lng, e.lat, e.lng) * 1.4;
+                let baseEta = (distKm / 50) * 60; // minutes
+                if (emergencyType === 'high') baseEta *= 0.7; else if (emergencyType === 'medium') baseEta *= 0.85;
+                displayRoute(simulated);
+                routeSummaryDiv.innerHTML = `<p><strong>Algorithm Used:</strong> Simulated (avoid blocked)</p>
+                    <p><strong>Distance (approx):</strong> ${distKm.toFixed(2)} km</p>
+                    <p><strong>Road Conditions:</strong> ${emergencyType} priority</p>`;
+                etaDisplay.textContent = Estimated Arrival Time: ${Math.round(baseEta)} minutes;
+                lastRouteDurationMinutes = baseEta;
+                routeInfoDiv.style.display = 'block';
+            } else {
+                const distance = route.distance;
+                const duration = route.duration;
+                let baseEta = duration / 60;
+                if (emergencyType === 'high') baseEta *= 0.7; else if (emergencyType === 'medium') baseEta *= 0.85;
+                displayRoute(pathPoints);
+                routeSummaryDiv.innerHTML = `<p><strong>Algorithm Used:</strong> OSRM</p>
+                    <p><strong>Distance:</strong> ${(distance / 1000).toFixed(2)} km</p>
+                    <p><strong>Road Conditions:</strong> ${emergencyType} priority</p>`;
+                etaDisplay.textContent = Estimated Arrival Time: ${Math.round(baseEta)} minutes;
+                lastRouteDurationMinutes = baseEta;
+                routeInfoDiv.style.display = 'block';
+            }
+        } catch (err) {
+            console.error(err);
+            alert(err.message || 'Routing failed');
+        } finally {
+            calculateRouteBtn.textContent = 'Calculate Optimal Route';
+            calculateRouteBtn.disabled = false;
+        }
+    }
+
+    // Haversine (km)
+    function haversineDistance(lat1, lon1, lat2, lon2) {
+        const toRad = x => x * Math.PI / 180;
+        const R = 6371;
+        const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+        const a = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.pow(Math.sin(dLon / 2), 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    // Simulated route generator
+    function generateSimulatedRoute(start, end, priority, blockedPoints) {
+        const pts = [];
+        const steps = 30;
+        const curvature = priority === 'high' ? 0.001 : priority === 'medium' ? 0.002 : 0.003;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const lat = start.lat + (end.lat - start.lat) * t;
+            const lng = start.lng + (end.lng - start.lng) * t + Math.sin(t * Math.PI) * curvature * (1 + i / steps);
+            pts.push([lat, lng]);
+        }
+        if (blockedPoints && blockedPoints.length > 0) {
+            blockedPoints.forEach(b => {
+                let minIdx = 0, minD = Infinity;
+                for (let i = 0; i < pts.length; i++) {
+                    const d = Math.hypot(pts[i][0] - b.latlng.lat, pts[i][1] - b.latlng.lng);
+                    if (d < minD) { minD = d; minIdx = i; }
+                }
+                const shiftLat = 0.002 + Math.random() * 0.001;
+                const shiftLng = 0.002 + Math.random() * 0.001;
+                if (minIdx > 0) { pts[minIdx - 1][0] += shiftLat; pts[minIdx - 1][1] += shiftLng; }
+                pts[minIdx][0] += shiftLat; pts[minIdx][1] += shiftLng;
+                if (minIdx < pts.length - 1) { pts[minIdx + 1][0] += shiftLat; pts[minIdx + 1][1] += shiftLng; }
+            });
+        }
+        return pts;
+    }
+
+    // Display route
+    function displayRoute(routePts) {
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = L.polyline(routePts, { color: ROUTE_COLOR, weight: 5, opacity: 0.95, lineJoin: 'round', lineCap: 'round' }).addTo(map);
+        try { map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] }); } catch (e) { }
+    }
+
+    // Toggle road block mode
+    function toggleRoadBlockMode() {
+        roadBlockMode = !roadBlockMode;
+        blockRoadBtn.textContent = roadBlockMode ? 'Disable Road Block Mode' : 'Enable Road Block Mode';
+        blockRoadBtn.style.backgroundColor = roadBlockMode ? '#e74c3c' : '#3498db';
+        updateSelectionModeDisplay();
+    }
+
+    // Add / remove blocked point
+    function addRoadBlock(latlng) {
+        const tol = 0.00001;
+        const idx = blockedRoads.findIndex(r => Math.abs(r.latlng.lat - latlng.lat) < tol && Math.abs(r.latlng.lng - latlng.lng) < tol);
+        if (idx >= 0) {
+            map.removeLayer(blockedRoads[idx].marker);
+            blockedRoads.splice(idx, 1);
+        } else {
+            const weight = emergencyType === 'high' ? 100 : emergencyType === 'medium' ? 50 : 20;
+            const marker = L.marker(latlng, { icon: L.divIcon({
+                className: 'road-block-marker', html: '<div style="background:#e74c3c;border-radius:50%;width:15px;height:15px;border:2px solid white;"></div>',
+                iconSize: [24, 24], iconAnchor: [12, 12]
+            }) }).addTo(map).bindPopup(Blocked Point (Weight: ${weight}));
+            blockedRoads.push({ latlng, marker, weight });
+        }
+        updateBlockedRoadsList();
+    }
+
+    function updateBlockedRoadsList() {
+        blockedRoadsList.innerHTML = '<h4>Blocked Roads:</h4>';
+        if (blockedRoads.length === 0) { blockedRoadsList.innerHTML += '<p>No roads blocked</p>'; return; }
+        const ul = document.createElement('ul');
+        blockedRoads.forEach((r, i) => {
+            const li = document.createElement('li'); li.style.marginBottom = '0.5rem';
+            const span = document.createElement('span');
+            span.textContent = Lat: ${r.latlng.lat.toFixed(4)}, Lng: ${r.latlng.lng.toFixed(4)};
+            const btn = document.createElement('button');
+            btn.textContent = 'Remove'; btn.style.marginLeft = '0.5rem'; btn.style.padding = '0.2rem 0.5rem'; btn.style.fontSize = '0.8rem'; btn.style.backgroundColor = '#e74c3c';
+            btn.addEventListener('click', () => { map.removeLayer(r.marker); blockedRoads.splice(i, 1); updateBlockedRoadsList(); });
+            li.appendChild(span); li.appendChild(btn); ul.appendChild(li);
+        });
+        blockedRoadsList.appendChild(ul);
+    }
+
+    // Traffic simulation
+    function simulateTrafficConditions() {
+        if (!routeLayer) { alert('No route to simulate traffic on.'); return; }
+        const orig = routeLayer.getLatLngs();
+        const modified = [];
+        orig.forEach((pt, idx) => {
+            modified.push(pt);
+            if (idx < orig.length - 1 && Math.random() > 0.7) {
+                const next = orig[idx + 1];
+                const midLat = (pt.lat + next.lat) / 2;
+                const midLng = (pt.lng + next.lng) / 2;
+                L.marker([midLat, midLng], { icon: L.divIcon({
+                    className: 'traffic-marker', html: '<div style="background:#f39c12;border-radius:50%;width:12px;height:12px;border:2px solid white;"></div>',
+                    iconSize: [16, 16], iconAnchor: [8, 8]
+                }) }).addTo(map).bindPopup('Traffic Delay');
+                modified.push({ lat: midLat + 0.0005, lng: midLng - 0.0005 });
+            }
+        });
+        routeLayer.setLatLngs(modified);
+        let curEta = 0; const m = etaDisplay.textContent.match(/\d+/); if (m) curEta = parseInt(m[0], 10);
+        const newEta = curEta + Math.floor(Math.random() * 5) + 2;
+        etaDisplay.textContent = Estimated Arrival Time: ${newEta} minutes (with traffic);
+        routeSummaryDiv.innerHTML += <p><strong>Note:</strong> Simulated traffic delays added</p>;
+        lastRouteDurationMinutes = newEta;
+    }
+
+    // Initialize UI
+    updateSelectionModeDisplay();
+    calculateRouteBtn.disabled = true;
+    const defaultHigh = document.querySelector('.emergency-option[data-type="high"]');
+    if (defaultHigh) defaultHigh.classList.add('selected');
+});
+</script>
+</body>
+</html>
